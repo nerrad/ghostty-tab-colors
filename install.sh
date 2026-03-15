@@ -84,24 +84,31 @@ HOOK_ENTRIES=$(cat <<'HOOKJSON'
 HOOKJSON
 )
 
-# Check if already installed (any hook referencing our script)
-if jq -e '.hooks // {} | to_entries[] | .value[]? | .hooks[]? | select(.command and (.command | contains("ghostty-tab-color.sh")))' "$SETTINGS" &>/dev/null; then
-    echo "Hooks already present in settings.json — skipping patch"
-else
-    # Merge hook entries into existing settings.json
-    # For each event, append our entries to the existing array (or create it)
-    PATCHED=$(jq --argjson new "$HOOK_ENTRIES" '
-        .hooks //= {} |
-        reduce ($new | to_entries[]) as $entry (.;
-            .hooks[$entry.key] = (.hooks[$entry.key] // []) + $entry.value
-        )
-    ' "$SETTINGS")
+# Idempotent merge: remove any existing ghostty-tab-color entries first, then append ours.
+# This makes repeated installs safe (no duplicate hooks).
+PATCHED=$(jq --argjson new "$HOOK_ENTRIES" '
+    .hooks //= {} |
+    # Strip existing ghostty-tab-color entries from all event arrays
+    .hooks |= with_entries(
+        .value = [(.value // [])[] | select(
+            (.hooks // []) | all(.command // "" | contains("ghostty-tab-color.sh") | not)
+        )]
+    ) |
+    # Append our entries
+    reduce ($new | to_entries[]) as $entry (.;
+        .hooks[$entry.key] = (.hooks[$entry.key] // []) + $entry.value
+    )
+' "$SETTINGS")
 
-    # Write back atomically
-    printf '%s\n' "$PATCHED" > "${SETTINGS}.tmp"
-    mv "${SETTINGS}.tmp" "$SETTINGS"
-    echo "Patched settings.json with hook entries"
+# Validate before writing — never overwrite with empty/invalid JSON
+if [[ -z "$PATCHED" ]] || ! printf '%s\n' "$PATCHED" | jq empty 2>/dev/null; then
+    echo "Error: jq produced invalid output — settings.json not modified" >&2
+    exit 1
 fi
+
+printf '%s\n' "$PATCHED" > "${SETTINGS}.tmp"
+mv "${SETTINGS}.tmp" "$SETTINGS"
+echo "Patched settings.json with hook entries"
 
 # --- Symlink shell integration ---
 
