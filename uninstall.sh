@@ -39,6 +39,12 @@ if [[ -f "$SETTINGS" ]] && command -v jq &>/dev/null; then
             )
         ' "$SETTINGS")
 
+        # Validate before writing — never overwrite with empty/invalid JSON
+        if [[ -z "$PATCHED" ]] || ! printf '%s\n' "$PATCHED" | jq empty 2>/dev/null; then
+            echo "Error: jq produced invalid output — settings.json not modified" >&2
+            exit 1
+        fi
+
         printf '%s\n' "$PATCHED" > "${SETTINGS}.tmp"
         mv "${SETTINGS}.tmp" "$SETTINGS"
         echo "Removed hook entries from settings.json"
@@ -52,9 +58,8 @@ fi
 # --- Remove source line from .zshrc ---
 
 if [[ -f "$ZSHRC" ]] && grep -qF "agent-tab-colors.zsh" "$ZSHRC"; then
-    # Remove the source line and the comment above it
-    sed -i '' '/# Ghostty agent tab color indicators/d' "$ZSHRC"
-    sed -i '' '/agent-tab-colors\.zsh/d' "$ZSHRC"
+    # Remove the source line and the comment above it in a single pass
+    sed -i '' -e '/# Ghostty agent tab color indicators/d' -e '/agent-tab-colors\.zsh/d' "$ZSHRC"
     echo "Removed source line from .zshrc"
 else
     echo "Source line not in .zshrc — skipping"
